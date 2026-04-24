@@ -108,7 +108,9 @@ const S = {
 };
 
 // ── API Calls ────────────────────────────────────────────────────────
-async function callKeibaAI(prompt, systemPrompt) {
+const delay = (ms) => new Promise((r) => setTimeout(r, ms));
+
+async function callKeibaAI(prompt, systemPrompt, retryCount = 0) {
   const key = getApiKey();
   if (!key) throw new Error("APIキーを設定してください。");
 
@@ -127,6 +129,13 @@ async function callKeibaAI(prompt, systemPrompt) {
       tools: [{ type: "web_search_20250305", name: "web_search" }],
     }),
   });
+
+  if (res.status === 429 && retryCount < 2) {
+    const waitSec = 30 + retryCount * 15;
+    console.log(`Rate limited. Waiting ${waitSec}s before retry...`);
+    await delay(waitSec * 1000);
+    return callKeibaAI(prompt, systemPrompt, retryCount + 1);
+  }
 
   if (!res.ok) throw new Error(`API エラー (${res.status}): ${await res.text()}`);
 
@@ -566,7 +575,7 @@ function PredictTab({ onPredicted }) {
 
       <button style={{ ...S.btn(true), opacity: loading ? 0.7 : 1, marginBottom: 14 }}
         onClick={predict} disabled={loading}>
-        {loading ? "🔍 AI分析中... (出馬表検索→予想生成)" : "🏇 AI予想を生成"}
+        {loading ? "🔍 AI分析中... (出馬表検索→予想生成、最大1分かかります)" : "🏇 AI予想を生成"}
       </button>
 
       {prediction && (
