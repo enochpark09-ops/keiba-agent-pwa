@@ -147,33 +147,25 @@ async function callKeibaAI(prompt, systemPrompt, retryCount = 0) {
 async function fetchRacePrediction(org, course, raceDate, raceNum) {
   const orgLabel = org === "jra" ? "JRA（中央競馬）" : "NAR（地方競馬）";
   const dateFormatted = raceDate.replace(/-/g, "");
-  const courseMap = {
-    "東京": "tokyo", "中山": "nakayama", "阪神": "hanshin", "京都": "kyoto",
-    "中京": "chukyo", "小倉": "kokura", "新潟": "niigata", "福島": "fukushima",
-    "札幌": "sapporo", "函館": "hakodate",
-    "大井": "ooi", "川崎": "kawasaki", "船橋": "funabashi", "浦和": "urawa",
-    "門別": "monbetsu", "園田": "sonoda", "名古屋": "nagoya", "笠松": "kasamatsu",
-    "金沢": "kanazawa", "高知": "kochi", "佐賀": "saga",
-  };
 
   const systemPrompt = `あなたは日本競馬の予想情報を収集・分析するアシスタントです。
 
-【作業手順 - 必ず2段階で実行】
+【作業手順】
+1. まず出馬表・予想情報をWeb検索で収集します
+2. 検索結果に具体的な馬名・騎手・オッズなどが含まれている場合、それをそのまま使用します
+3. 検索で見つからない場合は「見つかりませんでした」と正直に報告します
 
-第1段階：出馬表の収集
-- まず出馬表を検索して、出走馬の一覧（馬番・馬名・騎手・人気順）を確認します。
-- これが予想の土台になります。
+【検索のコツ】
+- 「netkeiba 出馬表 [競馬場] [日付]」で出馬表を探す
+- 「[競馬場] [レース番号]R 予想 [日付]」で予想を探す  
+- 「馬券生活 偏差値 [日付]」で競馬偏差値サイトの無料予想を探す
+- 「競馬ラボ [競馬場] [日付] 予想」で追加予想を探す
 
-第2段階：予想・印の収集
-- 複数の予想サイトやスポーツ新聞の◎○▲△印を検索で収集します。
-- 予想印が見つからない場合は、出馬表のオッズや人気順から分析します。
+【絶対禁止事項】
+- 実際の検索結果に含まれていない馬名・馬番を捏造すること
+- 検索できなかった情報を推測で埋めること
 
-【重要ルール】
-- 検索で見つからなかった情報を絶対に捏造しないでください。
-- 出馬表から得た実際の馬名・馬番のみ使用してください。
-- 予想印が見つからない場合は、オッズ人気順をベースに分析してOKです。
-
-出力形式（必ず以下のJSON形式で）：
+出力形式（必ずJSON）：
 {
   "race_info": {
     "date": "開催日",
@@ -191,8 +183,8 @@ async function fetchRacePrediction(org, course, raceDate, raceNum) {
     {
       "site_name": "サイト名",
       "url": "参照URL",
-      "prediction_summary": "そのサイトの予想要約（◎○▲含む）",
-      "recommended_horses": ["推奨馬名リスト"]
+      "prediction_summary": "予想要約（◎○▲の印を含む）",
+      "recommended_horses": ["推奨馬名"]
     }
   ],
   "consensus_analysis": {
@@ -201,12 +193,12 @@ async function fetchRacePrediction(org, course, raceDate, raceNum) {
         "horse_number": 馬番,
         "horse_name": "馬名",
         "jockey": "騎手",
-        "support_count": "何サイトが推奨 or 人気順位",
-        "sites": ["推奨しているサイト名"],
+        "support_count": "推奨サイト数 or 人気順",
+        "sites": ["推奨サイト名"],
         "consensus_role": "◎本命/○対抗/▲単穴/△連下"
       }
     ],
-    "summary": "全体的な予想傾向の分析"
+    "summary": "総合分析"
   },
   "dark_horse": {
     "horse_name": "穴馬候補",
@@ -216,23 +208,23 @@ async function fetchRacePrediction(org, course, raceDate, raceNum) {
   "caution": "注意点"
 }
 
-必ずJSON形式のみ出力。`;
+必ずJSON形式のみ出力。出馬表が見つかったが予想印が見つからない場合は、人気順から◎○▲を割り当ててください。`;
 
   const prompt = `${orgLabel}の${course}競馬場、${raceDate}の第${raceNum}レースを分析してください。
 
-【第1段階：出馬表検索】以下を順番に検索してください：
-1. 「${course} ${raceNum}R ${raceDate} 出馬表」
-2. 「netkeiba ${course} ${dateFormatted} ${raceNum}R」
-3. 「${course}競馬 ${raceDate.slice(5).replace("-","月")}日 ${raceNum}レース」
+以下の検索を実行して情報を集めてください：
 
-【第2段階：予想検索】出馬表が見つかったら：
-4. 「${course} ${raceNum}R 予想 印 ◎」
-5. 「${course}競馬 ${raceDate} 予想 本命」
-6. 「${course} ${raceNum}R ${raceDate} 無料予想」
+1. 「netkeiba ${course} ${raceDate} ${raceNum}R 出馬表」
+2. 「${course} ${raceNum}R ${raceDate} 予想」
+3. 「${course}競馬 ${raceDate.slice(5).replace("-","月")}日 ${raceNum}R 無料予想」
+4. 「馬券生活 偏差値 ${raceDate}」
+5. 「競馬グラント ${course} ${raceDate}」
 
-出馬表の情報をベースに、見つかった予想を統合分析してください。
-予想が見つからない場合は、出馬表のオッズ・人気順から独自分析してください。
-情報を捏造せず、見つかった事実のみで報告してください。`;
+出馬表（馬名・騎手・人気）が見つかったら必ずentriesに含めてください。
+予想サイトの◎○▲印が見つかったらsourcesに含めてください。
+予想印が見つからなくても、出馬表の人気順位から本命・対抗・穴馬を割り当ててconsensus_analysisを作成してください。
+
+検索で情報が全く見つからない場合のみ、正直にその旨を報告してください。`;
 
   const raw = await callKeibaAI(prompt, systemPrompt);
   // Robust JSON extraction with brace matching
