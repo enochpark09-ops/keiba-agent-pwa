@@ -509,7 +509,11 @@ function TicketResult({ combo }) {
 function PredictTab({ onPredicted }) {
   const [org, setOrg] = useState("jra");
   const [course, setCourse] = useState("");
-  const [raceDate, setRaceDate] = useState(new Date().toISOString().slice(0, 10));
+  const [raceDate, setRaceDate] = useState(() => {
+    const now = new Date();
+    const kst = new Date(now.getTime() + (9 * 60 * 60 * 1000) - (now.getTimezoneOffset() * 60 * 1000));
+    return kst.toISOString().slice(0, 10);
+  });
   const [raceNum, setRaceNum] = useState("11");
   const [loading, setLoading] = useState(false);
   const [prediction, setPrediction] = useState(null);
