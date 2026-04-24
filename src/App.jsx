@@ -146,16 +146,20 @@ async function callKeibaAI(prompt, systemPrompt, retryCount = 0) {
 
 async function fetchRacePrediction(org, course, raceDate, raceNum) {
   const orgLabel = org === "jra" ? "JRA（中央競馬）" : "NAR（地方競馬）";
-  const systemPrompt = `あなたは日本競馬予想の専門家AIです。
-データ分析と統計に基づいた合理的な予想を行います。
+  const systemPrompt = `あなたは日本競馬の無料予想サイトを横断検索して情報を収集・分析するアシスタントです。
 
-分析観点：
-- 出走馬の近走成績・クラス実績
-- 騎手・調教師のコース適性
-- 距離適性・馬場状態への対応
-- 枠順の有利不利
-- ローテーション・間隔
-- 展開予想（ペース・隊列）
+【重要ルール】
+- あなた自身が予想を作るのではありません。
+- 複数の無料予想サイトやネット競馬新聞の予想を検索で収集し、それらを比較・総合分析します。
+- 検索で見つからなかった情報を絶対に捏造しないでください。
+- 各サイトの予想内容をそのまま引用し、出典を明記してください。
+
+【検索すべきサイト・ソース】
+1. netkeiba.com — 出馬表・予想オッズ・記者予想
+2. 競馬新聞ゼロ (keiba0.com) — 無料ネット競馬新聞の予想
+3. 競馬AI ATHENA (keiba-ai.jp) — AI予想の着順予測
+4. 馬ランド (umarand.com) — 無料予想・データ分析
+5. Yahoo競馬、スポーツ新聞各社の予想
 
 出力形式（必ず以下のJSON形式で）：
 {
@@ -163,46 +167,62 @@ async function fetchRacePrediction(org, course, raceDate, raceNum) {
     "date": "開催日",
     "course": "競馬場",
     "race_number": レース番号,
-    "race_name": "レース名",
+    "race_name": "レース名（検索で判明した場合）",
     "distance": "距離",
     "surface": "芝/ダート",
-    "grade": "クラス/グレード",
     "horse_count": 出走頭数
   },
-  "predictions": [
+  "sources": [
     {
-      "rank": 1,
-      "horse_number": 馬番,
-      "horse_name": "馬名",
-      "jockey": "騎手",
-      "reason": "推奨理由（2-3文）",
-      "confidence": "S/A/B/C"
+      "site_name": "サイト名",
+      "url": "参照URL",
+      "prediction_summary": "そのサイトの予想要約",
+      "recommended_horses": ["推奨馬名リスト"]
     }
   ],
-  "pace_analysis": "展開予想の説明",
-  "track_condition_note": "馬場状態に関する注意点",
-  "dark_horse": {
-    "horse_number": 馬番,
-    "horse_name": "穴馬名",
-    "reason": "穴馬推奨理由"
+  "consensus_analysis": {
+    "most_supported": [
+      {
+        "horse_number": 馬番,
+        "horse_name": "馬名",
+        "support_count": "何サイトが推奨しているか",
+        "sites": ["推奨しているサイト名"],
+        "consensus_role": "◎本命/○対抗/▲単穴/△連下"
+      }
+    ],
+    "summary": "全体的な予想傾向の分析（どのサイトも一致しているポイント、意見が割れているポイント）"
   },
-  "risk_factors": ["リスク要因1", "リスク要因2"]
+  "dark_horse": {
+    "horse_name": "穴馬候補（1サイトだけが推している馬など）",
+    "source": "推奨元サイト",
+    "reason": "理由"
+  },
+  "caution": "予想を参照する上での注意点"
 }
 
 規則：
-- 上位5頭まで予想（confidence: S=本命, A=対抗, B=単穴, C=連下）
-- Webで最新の出馬表・オッズを検索して分析
-- 必ずJSON形式のみ出力（マークダウンコードブロック不要）`;
+- 最低3サイト以上の予想を収集すること
+- 検索で見つからなかった場合は正直に「情報が見つかりませんでした」と報告
+- 捏造・推測で馬名や馬番を作らないこと
+- 必ずJSON形式のみ出力`;
 
-  const prompt = `${orgLabel}の${course}競馬場、${raceDate}の第${raceNum}レースを予想してください。
+  const prompt = `${orgLabel}の${course}競馬場、${raceDate}の第${raceNum}レースについて、複数の無料予想サイトから予想を収集してください。
 
-Webで「${course} ${raceDate} ${raceNum}レース 出馬表」を検索し、最新の出走馬情報を元に予想してください。
-netkeiba.comやJRA公式サイトの情報を参照してください。`;
+以下の検索を順番に実行してください：
+1. 「${course} ${raceDate} ${raceNum}レース 出馬表」で出走馬情報を確認
+2. 「${course} ${raceDate} ${raceNum}R 予想」で各サイトの予想を収集
+3. 「${course} ${raceNum}R 予想 無料」で追加の予想情報を収集
+
+各サイトの予想を比較して、どの馬が最も多くのサイトから支持されているかを分析してください。
+検索で情報が見つからない場合は、絶対に情報を捏造せず、その旨を正直に報告してください。`;
 
   const raw = await callKeibaAI(prompt, systemPrompt);
   try {
-    const jsonMatch = raw.match(/\{[\s\S]*"predictions"[\s\S]*\}/);
+    const jsonMatch = raw.match(/\{[\s\S]*"sources"[\s\S]*\}/);
     if (jsonMatch) return JSON.parse(jsonMatch[0]);
+    // Fallback: try old format
+    const oldMatch = raw.match(/\{[\s\S]*"predictions"[\s\S]*\}/);
+    if (oldMatch) return JSON.parse(oldMatch[0]);
   } catch {}
   return { raw_response: raw, error: "JSON解析失敗" };
 }
@@ -319,19 +339,68 @@ function PredictionResult({ pred }) {
           {info.course && <span>📍{info.course}</span>}
           {info.distance && <span>📏{info.distance}</span>}
           {info.surface && <span>🏟️{info.surface}</span>}
-          {info.grade && <span>🏆{info.grade}</span>}
           {info.horse_count && <span>🐴{info.horse_count}頭</span>}
         </div>
       </div>
 
-      {/* Predictions */}
-      {(pred.predictions || []).map((p, i) => (
+      {/* Sources - 각 예상지 정보 */}
+      {(pred.sources || []).length > 0 && (
+        <div style={S.card}>
+          <div style={{ fontSize: 13, fontWeight: 600, color: C.accent, marginBottom: 8 }}>📰 参照した予想サイト</div>
+          {pred.sources.map((src, i) => (
+            <div key={i} style={{ padding: "8px 10px", background: "#2d1560", borderRadius: "8px", marginBottom: 6, fontSize: 13 }}>
+              <div style={{ fontWeight: 600, color: C.text, marginBottom: 3 }}>{src.site_name}</div>
+              <div style={{ fontSize: 12, color: C.dim, lineHeight: 1.5, marginBottom: 4 }}>{src.prediction_summary}</div>
+              {src.recommended_horses && (
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+                  {src.recommended_horses.map((h, j) => (
+                    <span key={j} style={{ display: "inline-block", padding: "2px 8px", borderRadius: "10px", fontSize: 11, background: `${C.accent}22`, color: C.accent, fontWeight: 600 }}>{h}</span>
+                  ))}
+                </div>
+              )}
+              {src.url && <div style={{ fontSize: 10, color: C.dim, marginTop: 3 }}>{src.url}</div>}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Consensus Analysis - 종합 분석 */}
+      {pred.consensus_analysis && (
+        <div>
+          <div style={{ fontSize: 13, fontWeight: 700, color: C.accent, margin: "12px 0 8px 0" }}>🎯 총합 분석 (예상지 종합)</div>
+          {(pred.consensus_analysis.most_supported || []).map((horse, i) => (
+            <div key={i} style={{ ...S.card, borderLeft: `3px solid ${i === 0 ? C.accent : i === 1 ? C.red : C.blue}` }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <span style={{ fontSize: 20, fontWeight: 800, color: i === 0 ? C.accent : C.text }}>
+                    {horse.horse_number || "?"}
+                  </span>
+                  <div>
+                    <div style={{ fontSize: 14, fontWeight: 700 }}>{horse.horse_name}</div>
+                    <div style={{ fontSize: 11, color: C.dim }}>{horse.support_count} | {(horse.sites || []).join(", ")}</div>
+                  </div>
+                </div>
+                <span style={S.badge(i === 0 ? C.accent : i === 1 ? C.red : C.blue)}>
+                  {horse.consensus_role || `${i+1}位`}
+                </span>
+              </div>
+            </div>
+          ))}
+          {pred.consensus_analysis.summary && (
+            <div style={S.card}>
+              <div style={{ fontSize: 12, fontWeight: 600, color: C.accent, marginBottom: 4 }}>📊 総合分析</div>
+              <div style={{ fontSize: 13, lineHeight: 1.6, color: C.dim }}>{pred.consensus_analysis.summary}</div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Legacy: predictions array (backward compat) */}
+      {!pred.consensus_analysis && (pred.predictions || []).map((p, i) => (
         <div key={i} style={{ ...S.card, borderLeft: `3px solid ${i === 0 ? C.accent : i === 1 ? C.red : C.blue}` }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <span style={{ fontSize: 20, fontWeight: 800, color: i === 0 ? C.accent : C.text }}>
-                {p.horse_number}
-              </span>
+              <span style={{ fontSize: 20, fontWeight: 800, color: i === 0 ? C.accent : C.text }}>{p.horse_number}</span>
               <div>
                 <div style={{ fontSize: 14, fontWeight: 700 }}>{p.horse_name}</div>
                 <div style={{ fontSize: 11, color: C.dim }}>{p.jockey}</div>
@@ -343,32 +412,22 @@ function PredictionResult({ pred }) {
         </div>
       ))}
 
-      {/* Pace Analysis */}
-      {pred.pace_analysis && (
-        <div style={S.card}>
-          <div style={{ fontSize: 12, fontWeight: 600, color: C.accent, marginBottom: 4 }}>📊 展開予想</div>
-          <div style={{ fontSize: 13, lineHeight: 1.6, color: C.dim }}>{pred.pace_analysis}</div>
-        </div>
-      )}
-
       {/* Dark Horse */}
-      {pred.dark_horse && (
+      {pred.dark_horse && pred.dark_horse.horse_name && (
         <div style={{ ...S.card, borderLeft: `3px solid ${C.green}` }}>
           <div style={{ fontSize: 12, fontWeight: 600, color: C.green, marginBottom: 4 }}>🌟 穴馬注目</div>
           <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 4 }}>
-            {pred.dark_horse.horse_number}番 {pred.dark_horse.horse_name}
+            {pred.dark_horse.horse_name}
+            {pred.dark_horse.source && <span style={{ fontSize: 11, color: C.dim, marginLeft: 6 }}>({pred.dark_horse.source})</span>}
           </div>
           <div style={{ fontSize: 12, color: C.dim, lineHeight: 1.5 }}>{pred.dark_horse.reason}</div>
         </div>
       )}
 
-      {/* Risk */}
-      {pred.risk_factors && pred.risk_factors.length > 0 && (
+      {/* Caution */}
+      {pred.caution && (
         <div style={S.card}>
-          <div style={{ fontSize: 12, fontWeight: 600, color: C.red, marginBottom: 4 }}>⚠️ リスク要因</div>
-          {pred.risk_factors.map((r, i) => (
-            <div key={i} style={{ fontSize: 12, color: C.dim, padding: "2px 0 2px 10px", borderLeft: `2px solid ${C.red}33` }}>{r}</div>
-          ))}
+          <div style={{ fontSize: 12, color: C.red, lineHeight: 1.5 }}>⚠️ {pred.caution}</div>
         </div>
       )}
     </div>
