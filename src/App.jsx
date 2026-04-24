@@ -146,20 +146,32 @@ async function callKeibaAI(prompt, systemPrompt, retryCount = 0) {
 
 async function fetchRacePrediction(org, course, raceDate, raceNum) {
   const orgLabel = org === "jra" ? "JRA（中央競馬）" : "NAR（地方競馬）";
-  const systemPrompt = `あなたは日本競馬の無料予想サイトを横断検索して情報を収集・分析するアシスタントです。
+  const dateFormatted = raceDate.replace(/-/g, "");
+  const courseMap = {
+    "東京": "tokyo", "中山": "nakayama", "阪神": "hanshin", "京都": "kyoto",
+    "中京": "chukyo", "小倉": "kokura", "新潟": "niigata", "福島": "fukushima",
+    "札幌": "sapporo", "函館": "hakodate",
+    "大井": "ooi", "川崎": "kawasaki", "船橋": "funabashi", "浦和": "urawa",
+    "門別": "monbetsu", "園田": "sonoda", "名古屋": "nagoya", "笠松": "kasamatsu",
+    "金沢": "kanazawa", "高知": "kochi", "佐賀": "saga",
+  };
+
+  const systemPrompt = `あなたは日本競馬の予想情報を収集・分析するアシスタントです。
+
+【作業手順 - 必ず2段階で実行】
+
+第1段階：出馬表の収集
+- まず出馬表を検索して、出走馬の一覧（馬番・馬名・騎手・人気順）を確認します。
+- これが予想の土台になります。
+
+第2段階：予想・印の収集
+- 複数の予想サイトやスポーツ新聞の◎○▲△印を検索で収集します。
+- 予想印が見つからない場合は、出馬表のオッズや人気順から分析します。
 
 【重要ルール】
-- あなた自身が予想を作るのではありません。
-- 複数の無料予想サイトやネット競馬新聞の予想を検索で収集し、それらを比較・総合分析します。
 - 検索で見つからなかった情報を絶対に捏造しないでください。
-- 各サイトの予想内容をそのまま引用し、出典を明記してください。
-
-【検索すべきサイト・ソース】
-1. netkeiba.com — 出馬表・予想オッズ・記者予想
-2. 競馬新聞ゼロ (keiba0.com) — 無料ネット競馬新聞の予想
-3. 競馬AI ATHENA (keiba-ai.jp) — AI予想の着順予測
-4. 馬ランド (umarand.com) — 無料予想・データ分析
-5. Yahoo競馬、スポーツ新聞各社の予想
+- 出馬表から得た実際の馬名・馬番のみ使用してください。
+- 予想印が見つからない場合は、オッズ人気順をベースに分析してOKです。
 
 出力形式（必ず以下のJSON形式で）：
 {
@@ -167,16 +179,19 @@ async function fetchRacePrediction(org, course, raceDate, raceNum) {
     "date": "開催日",
     "course": "競馬場",
     "race_number": レース番号,
-    "race_name": "レース名（検索で判明した場合）",
+    "race_name": "レース名",
     "distance": "距離",
     "surface": "芝/ダート",
     "horse_count": 出走頭数
   },
+  "entries": [
+    {"number": 馬番, "name": "馬名", "jockey": "騎手", "popularity": 人気順位}
+  ],
   "sources": [
     {
       "site_name": "サイト名",
       "url": "参照URL",
-      "prediction_summary": "そのサイトの予想要約",
+      "prediction_summary": "そのサイトの予想要約（◎○▲含む）",
       "recommended_horses": ["推奨馬名リスト"]
     }
   ],
@@ -185,45 +200,58 @@ async function fetchRacePrediction(org, course, raceDate, raceNum) {
       {
         "horse_number": 馬番,
         "horse_name": "馬名",
-        "support_count": "何サイトが推奨しているか",
+        "jockey": "騎手",
+        "support_count": "何サイトが推奨 or 人気順位",
         "sites": ["推奨しているサイト名"],
         "consensus_role": "◎本命/○対抗/▲単穴/△連下"
       }
     ],
-    "summary": "全体的な予想傾向の分析（どのサイトも一致しているポイント、意見が割れているポイント）"
+    "summary": "全体的な予想傾向の分析"
   },
   "dark_horse": {
-    "horse_name": "穴馬候補（1サイトだけが推している馬など）",
-    "source": "推奨元サイト",
+    "horse_name": "穴馬候補",
+    "source": "推奨元",
     "reason": "理由"
   },
-  "caution": "予想を参照する上での注意点"
+  "caution": "注意点"
 }
 
-規則：
-- 最低3サイト以上の予想を収集すること
-- 検索で見つからなかった場合は正直に「情報が見つかりませんでした」と報告
-- 捏造・推測で馬名や馬番を作らないこと
-- 必ずJSON形式のみ出力`;
+必ずJSON形式のみ出力。`;
 
-  const prompt = `${orgLabel}の${course}競馬場、${raceDate}の第${raceNum}レースについて、複数の無料予想サイトから予想を収集してください。
+  const prompt = `${orgLabel}の${course}競馬場、${raceDate}の第${raceNum}レースを分析してください。
 
-以下の検索を順番に実行してください：
-1. 「${course} ${raceDate} ${raceNum}レース 出馬表」で出走馬情報を確認
-2. 「${course} ${raceDate} ${raceNum}R 予想」で各サイトの予想を収集
-3. 「${course} ${raceNum}R 予想 無料」で追加の予想情報を収集
+【第1段階：出馬表検索】以下を順番に検索してください：
+1. 「${course} ${raceNum}R ${raceDate} 出馬表」
+2. 「netkeiba ${course} ${dateFormatted} ${raceNum}R」
+3. 「${course}競馬 ${raceDate.slice(5).replace("-","月")}日 ${raceNum}レース」
 
-各サイトの予想を比較して、どの馬が最も多くのサイトから支持されているかを分析してください。
-検索で情報が見つからない場合は、絶対に情報を捏造せず、その旨を正直に報告してください。`;
+【第2段階：予想検索】出馬表が見つかったら：
+4. 「${course} ${raceNum}R 予想 印 ◎」
+5. 「${course}競馬 ${raceDate} 予想 本命」
+6. 「${course} ${raceNum}R ${raceDate} 無料予想」
+
+出馬表の情報をベースに、見つかった予想を統合分析してください。
+予想が見つからない場合は、出馬表のオッズ・人気順から独自分析してください。
+情報を捏造せず、見つかった事実のみで報告してください。`;
 
   const raw = await callKeibaAI(prompt, systemPrompt);
-  try {
-    const jsonMatch = raw.match(/\{[\s\S]*"sources"[\s\S]*\}/);
-    if (jsonMatch) return JSON.parse(jsonMatch[0]);
-    // Fallback: try old format
-    const oldMatch = raw.match(/\{[\s\S]*"predictions"[\s\S]*\}/);
-    if (oldMatch) return JSON.parse(oldMatch[0]);
-  } catch {}
+  // Robust JSON extraction with brace matching
+  let parsed = null;
+  const cleaned = raw.replace(/```[a-z]*\n?/g, "").replace(/```/g, "").trim();
+  try { parsed = JSON.parse(cleaned); } catch {}
+  if (!parsed) {
+    let depth = 0, start = -1;
+    for (let i = 0; i < cleaned.length; i++) {
+      if (cleaned[i] === '{') { if (depth === 0) start = i; depth++; }
+      else if (cleaned[i] === '}') {
+        depth--;
+        if (depth === 0 && start >= 0) {
+          try { parsed = JSON.parse(cleaned.substring(start, i + 1)); break; } catch { start = -1; }
+        }
+      }
+    }
+  }
+  if (parsed) return parsed;
   return { raw_response: raw, error: "JSON解析失敗" };
 }
 
@@ -350,6 +378,27 @@ function PredictionResult({ pred }) {
           {info.horse_count && <span>🐴{info.horse_count}頭</span>}
         </div>
       </div>
+
+      {/* Entries - 출마표 */}
+      {(pred.entries || []).length > 0 && (
+        <div style={S.card}>
+          <div style={{ fontSize: 13, fontWeight: 600, color: C.accent, marginBottom: 8 }}>📋 出馬表</div>
+          <div style={{ display: "grid", gridTemplateColumns: "40px 1fr 80px 40px", gap: "4px 8px", fontSize: 12 }}>
+            <span style={{ color: C.dim, fontWeight: 600 }}>枠</span>
+            <span style={{ color: C.dim, fontWeight: 600 }}>馬名</span>
+            <span style={{ color: C.dim, fontWeight: 600 }}>騎手</span>
+            <span style={{ color: C.dim, fontWeight: 600, textAlign: "right" }}>人気</span>
+            {pred.entries.map((e, i) => (
+              <>
+                <span key={`n${i}`} style={{ fontWeight: 700, color: C.accent }}>{e.number}</span>
+                <span key={`h${i}`} style={{ fontWeight: 600 }}>{e.name}</span>
+                <span key={`j${i}`} style={{ color: C.dim }}>{e.jockey}</span>
+                <span key={`p${i}`} style={{ textAlign: "right", color: e.popularity <= 3 ? C.accent : C.dim }}>{e.popularity || "-"}</span>
+              </>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Sources - 각 예상지 정보 */}
       {(pred.sources || []).length > 0 && (
@@ -514,45 +563,30 @@ function TicketResult({ combo }) {
 }
 
 // ── Tab: Predict ─────────────────────────────────────────────────────
-function PredictTab({ onPredicted }) {
-  const [org, setOrg] = useState("jra");
-  const [course, setCourse] = useState("");
-  const [raceDate, setRaceDate] = useState(() => {
-    const now = new Date();
-    const kst = new Date(now.getTime() + (9 * 60 * 60 * 1000) - (now.getTimezoneOffset() * 60 * 1000));
-    return kst.toISOString().slice(0, 10);
-  });
-  const [raceNum, setRaceNum] = useState("11");
-  const [loading, setLoading] = useState(false);
-  const [prediction, setPrediction] = useState(null);
-  const [error, setError] = useState("");
-  const [todayInfo, setTodayInfo] = useState(null);
-  const [todayLoading, setTodayLoading] = useState(false);
+function PredictTab({ onPredicted, predictState, setPredictState }) {
+  const { org, course, raceDate, raceNum, loading, prediction, error, todayInfo, todayLoading } = predictState;
+  const set = (updates) => setPredictState((prev) => ({ ...prev, ...updates }));
   const resultRef = useRef(null);
 
   const courses = org === "jra" ? RACECOURSES_JRA : RACECOURSES_NAR;
 
   const loadToday = async () => {
-    setTodayLoading(true);
-    setTodayInfo(null);
+    set({ todayLoading: true, todayInfo: null });
     try {
       const info = await fetchTodayRaces(org);
-      setTodayInfo(info);
+      set({ todayInfo: info, todayLoading: false });
     } catch (e) {
-      setError(e.message);
+      set({ error: e.message, todayLoading: false });
     }
-    setTodayLoading(false);
   };
 
   const predict = async () => {
-    if (!course) { setError("競馬場を選択してください。"); return; }
-    setLoading(true);
-    setError("");
-    setPrediction(null);
+    if (!course) { set({ error: "競馬場を選択してください。" }); return; }
+    set({ loading: true, error: "", prediction: null });
 
     try {
       const pred = await fetchRacePrediction(org, course, raceDate, raceNum);
-      setPrediction(pred);
+      set({ prediction: pred, loading: false });
 
       const historyItem = {
         id: Date.now().toString(),
@@ -564,9 +598,8 @@ function PredictTab({ onPredicted }) {
 
       setTimeout(() => resultRef.current?.scrollIntoView({ behavior: "smooth" }), 200);
     } catch (e) {
-      setError(e.message);
+      set({ error: e.message, loading: false });
     }
-    setLoading(false);
   };
 
   return (
@@ -576,7 +609,7 @@ function PredictTab({ onPredicted }) {
         <div style={S.label}>開催区分</div>
         <div style={{ display: "flex", gap: 6 }}>
           {[["jra", "🏆 JRA（中央）"], ["nar", "🐴 NAR（地方）"]].map(([id, label]) => (
-            <div key={id} style={S.chip(org === id)} onClick={() => { setOrg(id); setCourse(""); }}>
+            <div key={id} style={S.chip(org === id)} onClick={() => { set({ org: id, course: "" }); }}>
               {label}
             </div>
           ))}
@@ -595,7 +628,7 @@ function PredictTab({ onPredicted }) {
           <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
             {todayInfo.meetings.map((m, i) => (
               <div key={i}
-                onClick={() => { setCourse(m.course); setOrg(m.org === "NAR" ? "nar" : "jra"); }}
+                onClick={() => { set({ course: m.course, org: m.org === "NAR" ? "nar" : "jra" }); }}
                 style={{
                   padding: "8px 10px", background: "#2d1560", borderRadius: "6px",
                   fontSize: 13, cursor: "pointer", display: "flex", justifyContent: "space-between",
@@ -619,14 +652,14 @@ function PredictTab({ onPredicted }) {
         <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
           <div style={{ flex: 1 }}>
             <div style={S.label}>競馬場</div>
-            <select style={S.select} value={course} onChange={(e) => setCourse(e.target.value)}>
+            <select style={S.select} value={course} onChange={(e) => set({ course: e.target.value })}>
               <option value="">選択...</option>
               {courses.map((c) => <option key={c} value={c}>{c}</option>)}
             </select>
           </div>
           <div style={{ width: 80 }}>
             <div style={S.label}>レース</div>
-            <select style={S.select} value={raceNum} onChange={(e) => setRaceNum(e.target.value)}>
+            <select style={S.select} value={raceNum} onChange={(e) => set({ raceNum: e.target.value })}>
               {Array.from({ length: 12 }, (_, i) => i + 1).map((n) => (
                 <option key={n} value={n}>{n}R</option>
               ))}
@@ -635,7 +668,7 @@ function PredictTab({ onPredicted }) {
         </div>
         <div style={S.label}>開催日</div>
         <input type="date" style={S.input} value={raceDate}
-          onChange={(e) => setRaceDate(e.target.value)} />
+          onChange={(e) => set({ raceDate: e.target.value })} />
       </div>
 
       {error && (
@@ -877,6 +910,17 @@ export default function App() {
   const [history, setHistory] = useState([]);
   const [latestPrediction, setLatestPrediction] = useState(null);
 
+  // PredictTab state (lifted up for tab persistence)
+  const [predictState, setPredictState] = useState(() => {
+    const now = new Date();
+    const kst = new Date(now.getTime() + (9 * 60 * 60 * 1000) - (now.getTimezoneOffset() * 60 * 1000));
+    return {
+      org: "jra", course: "", raceDate: kst.toISOString().slice(0, 10),
+      raceNum: "11", loading: false, prediction: null, error: "",
+      todayInfo: null, todayLoading: false,
+    };
+  });
+
   useEffect(() => {
     try {
       const saved = JSON.parse(localStorage.getItem("keiba_history") || "[]");
@@ -917,7 +961,7 @@ export default function App() {
           </button>
         ))}
       </div>
-      {tab === "predict" && <PredictTab onPredicted={onPredicted} />}
+      {tab === "predict" && <PredictTab onPredicted={onPredicted} predictState={predictState} setPredictState={setPredictState} />}
       {tab === "tickets" && <TicketsTab latestPrediction={latestPrediction} />}
       {tab === "history" && <HistoryTab history={history} onDelete={onDelete} />}
       {tab === "settings" && <SettingsTab />}
