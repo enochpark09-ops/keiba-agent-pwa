@@ -274,12 +274,19 @@ ${JSON.stringify(prediction, null, 2)}`;
 }
 
 async function fetchTodayRaces(org) {
+  // 한국/일본 시간(UTC+9) 기준 오늘 날짜
+  const now = new Date();
+  const kst = new Date(now.getTime() + (9 * 60 * 60 * 1000) - (now.getTimezoneOffset() * 60 * 1000));
+  const todayStr = kst.toISOString().slice(0, 10);
+  const dayNames = ["日", "月", "火", "水", "木", "金", "土"];
+  const dayOfWeek = dayNames[kst.getUTCDay()];
+
   const systemPrompt = `あなたは日本競馬の情報アシスタントです。
-今日の開催レース一覧を提供します。
+指定された日付の開催レース一覧を提供します。
 
 出力形式（JSON）：
 {
-  "date": "本日の日付",
+  "date": "開催日",
   "meetings": [
     {
       "course": "競馬場名",
@@ -295,7 +302,8 @@ async function fetchTodayRaces(org) {
 必ずJSON形式のみ出力。`;
 
   const orgLabel = org === "jra" ? "JRA（中央競馬）" : org === "nar" ? "NAR（地方競馬）" : "JRAとNAR";
-  const prompt = `今日の${orgLabel}の開催情報をWebで検索して教えてください。どの競馬場で何レース開催されているか確認してください。`;
+  const prompt = `${todayStr}（${dayOfWeek}曜日）の${orgLabel}の開催情報をWebで検索して教えてください。
+「${todayStr} ${orgLabel === "JRA（中央競馬）" ? "JRA" : "地方競馬"} 開催」で検索し、どの競馬場で何レース開催されているか確認してください。`;
 
   const raw = await callKeibaAI(prompt, systemPrompt);
   try {
