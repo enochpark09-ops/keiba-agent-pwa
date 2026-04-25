@@ -208,23 +208,29 @@ async function fetchRacePrediction(org, course, raceDate, raceNum) {
   "caution": "注意点"
 }
 
-必ずJSON形式のみ出力。出馬表が見つかったが予想印が見つからない場合は、人気順から◎○▲を割り当ててください。`;
+必ずJSON形式のみ出力。
+
+【最重要ルール】
+- 出馬表（馬名リスト）が見つかったら、予想サイトの印が見つからなくても、人気順位・オッズ・コース適性から独自に◎○▲△を割り当てて必ずconsensus_analysisを完成させてください。
+- 「情報が見つかりませんでした」で終わるのは、出馬表すら全く見つからない場合のみです。
+- 出馬表が見つかった場合は、必ず上位5頭の分析をconsensus_analysis.most_supportedに含めてください。`;
 
   const prompt = `${orgLabel}の${course}競馬場、${raceDate}の第${raceNum}レースを分析してください。
 
 以下の検索を実行して情報を集めてください：
 
-1. 「netkeiba ${course} ${raceDate} ${raceNum}R 出馬表」
-2. 「${course} ${raceNum}R ${raceDate} 予想」
-3. 「${course}競馬 ${raceDate.slice(5).replace("-","月")}日 ${raceNum}R 無料予想」
-4. 「馬券生活 偏差値 ${raceDate}」
-5. 「競馬グラント ${course} ${raceDate}」
+1. 「${course} ${raceDate} ${raceNum}R 出馬表 netkeiba」
+2. 「${course} ${raceNum}R ${raceDate} 予想 ◎○▲」
+3. 「${course} ${raceDate.slice(5).replace("-","月")}日 ${raceNum}R 予想」
+4. 「馬券生活 偏差値 ${raceDate} ${course}」
 
-出馬表（馬名・騎手・人気）が見つかったら必ずentriesに含めてください。
-予想サイトの◎○▲印が見つかったらsourcesに含めてください。
-予想印が見つからなくても、出馬表の人気順位から本命・対抗・穴馬を割り当ててconsensus_analysisを作成してください。
+【手順】
+1. まず出馬表から全出走馬の馬番・馬名・騎手を取得→entriesに記入
+2. 予想サイトの◎○▲印を探す→見つかったらsourcesに記入  
+3. 予想印が見つからない場合→出馬表の人気順・オッズからAIが独自に◎○▲△を割り当てる
+4. 必ずconsensus_analysis.most_supportedに上位5頭を記入する（これが最も重要）
 
-検索で情報が全く見つからない場合のみ、正直にその旨を報告してください。`;
+出馬表さえ見つかれば、予想サイトの情報がなくても独自分析で必ず結果を出してください。`;
 
   const raw = await callKeibaAI(prompt, systemPrompt);
   // Robust JSON extraction with brace matching
@@ -700,7 +706,12 @@ function TicketsTab({ latestPrediction }) {
   };
 
   const generate = async () => {
-    if (!latestPrediction || !latestPrediction.predictions) {
+    const hasPrediction = latestPrediction && (
+      latestPrediction.predictions || 
+      latestPrediction.consensus_analysis?.most_supported ||
+      latestPrediction.entries
+    );
+    if (!hasPrediction) {
       setError("先に「レース予想」タブでAI予想を生成してください。");
       return;
     }
@@ -719,9 +730,15 @@ function TicketsTab({ latestPrediction }) {
     setLoading(false);
   };
 
+  const hasPrediction = latestPrediction && (
+    latestPrediction.predictions || 
+    latestPrediction.consensus_analysis?.most_supported ||
+    latestPrediction.entries
+  );
+
   return (
     <div style={S.content}>
-      {!latestPrediction?.predictions ? (
+      {!hasPrediction ? (
         <div style={S.empty}>
           <div style={{ fontSize: 40, marginBottom: 10 }}>🎫</div>
           <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 4 }}>予想データなし</div>
@@ -737,7 +754,11 @@ function TicketsTab({ latestPrediction }) {
               {latestPrediction.race_info?.race_name || "レース"} - {latestPrediction.race_info?.course}
             </div>
             <div style={{ fontSize: 12, color: C.dim, marginTop: 4 }}>
-              予想: {(latestPrediction.predictions || []).map((p) => `${p.horse_number}${p.horse_name}`).join(" → ")}
+              予想: {latestPrediction.consensus_analysis?.most_supported
+                ? latestPrediction.consensus_analysis.most_supported.slice(0, 3).map((p) => `${p.horse_number || "?"}${p.horse_name}`).join(" → ")
+                : latestPrediction.predictions
+                ? latestPrediction.predictions.slice(0, 3).map((p) => `${p.horse_number}${p.horse_name}`).join(" → ")
+                : "出馬表ベース分析"}
             </div>
           </div>
 
