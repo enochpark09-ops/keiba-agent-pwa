@@ -968,6 +968,229 @@ function HistoryTab({ history, onDelete }) {
   );
 }
 
+// ── Tab: Feedback ────────────────────────────────────────────────────
+function FeedbackTab({ history, onUpdateHistory }) {
+  const [feedbacks, setFeedbacks] = useState(() => {
+    try { return JSON.parse(localStorage.getItem("keiba_feedbacks") || "{}"); } catch { return {}; }
+  });
+  const [selectedId, setSelectedId] = useState(null);
+  const [actualResult, setActualResult] = useState({ first: "", second: "", third: "" });
+  const [comment, setComment] = useState("");
+
+  const saveFeedbacks = (updated) => {
+    setFeedbacks(updated);
+    localStorage.setItem("keiba_feedbacks", JSON.stringify(updated));
+  };
+
+  const getFeedback = (id) => feedbacks[id] || null;
+
+  const saveFeedback = (id) => {
+    const updated = {
+      ...feedbacks,
+      [id]: {
+        actual: { ...actualResult },
+        comment,
+        savedAt: new Date().toISOString(),
+      }
+    };
+    saveFeedbacks(updated);
+    setSelectedId(null);
+  };
+
+  const deleteFeedback = (id) => {
+    const updated = { ...feedbacks };
+    delete updated[id];
+    saveFeedbacks(updated);
+  };
+
+  // 예상마 추출 (consensus or predictions)
+  const getPredictedHorses = (pred) => {
+    if (pred?.consensus_analysis?.most_supported) {
+      return pred.consensus_analysis.most_supported.slice(0, 5).map((h) => ({
+        number: h.horse_number,
+        name: h.horse_name,
+        role: h.consensus_role || "",
+      }));
+    }
+    if (pred?.predictions) {
+      return pred.predictions.slice(0, 5).map((p) => ({
+        number: p.horse_number,
+        name: p.horse_name,
+        role: p.confidence ? `${p.confidence}` : "",
+      }));
+    }
+    return [];
+  };
+
+  // 적중 판정
+  const checkHit = (predicted, actual) => {
+    if (!actual.first) return null;
+    const top3 = [actual.first, actual.second, actual.third].filter(Boolean);
+    const predNames = predicted.map((p) => p.name);
+    const hits = top3.filter((a) => predNames.some((p) => a.includes(p) || p.includes(a)));
+    return {
+      hitCount: hits.length,
+      hitNames: hits,
+      firstHit: predicted.length > 0 && top3[0] && (top3[0].includes(predicted[0]?.name) || predicted[0]?.name?.includes(top3[0])),
+    };
+  };
+
+  // Detail view
+  if (selectedId) {
+    const item = history.find((h) => h.id === selectedId);
+    if (!item) { setSelectedId(null); return null; }
+
+    const fb = getFeedback(selectedId);
+    const predicted = getPredictedHorses(item.prediction);
+
+    // Load existing feedback
+    if (fb && !actualResult.first && !comment) {
+      setTimeout(() => {
+        setActualResult(fb.actual || { first: "", second: "", third: "" });
+        setComment(fb.comment || "");
+      }, 0);
+    }
+
+    const hitResult = fb ? checkHit(predicted, fb.actual) : null;
+
+    return (
+      <div style={S.content}>
+        <button style={{ ...S.copyBtn, marginBottom: 10 }} onClick={() => { setSelectedId(null); setActualResult({ first: "", second: "", third: "" }); setComment(""); }}>
+          ← 목록으로
+        </button>
+
+        {/* Race Info */}
+        <div style={{ ...S.card, background: "linear-gradient(135deg, #2d1560, #1a0a2e)" }}>
+          <div style={{ fontSize: 14, fontWeight: 700, color: C.accent, marginBottom: 4 }}>
+            {item.org?.toUpperCase()} {item.course} {item.raceNum}R
+          </div>
+          <div style={{ fontSize: 12, color: C.dim }}>{item.raceDate}</div>
+        </div>
+
+        {/* AI Prediction Summary */}
+        <div style={S.card}>
+          <div style={{ fontSize: 13, fontWeight: 600, color: C.accent, marginBottom: 8 }}>🤖 AI 예상</div>
+          {predicted.map((h, i) => (
+            <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 0", fontSize: 13 }}>
+              <span style={{ width: 24, fontWeight: 800, color: i === 0 ? C.accent : C.text }}>{i + 1}</span>
+              <span style={{ fontWeight: 600, flex: 1 }}>{h.number ? `${h.number}번 ` : ""}{h.name}</span>
+              <span style={{ fontSize: 11, color: C.dim }}>{h.role}</span>
+            </div>
+          ))}
+        </div>
+
+        {/* Actual Result Input */}
+        <div style={S.card}>
+          <div style={{ fontSize: 13, fontWeight: 600, color: C.green, marginBottom: 8 }}>🏁 실제 결과 입력</div>
+          {[["first", "🥇 1착"], ["second", "🥈 2착"], ["third", "🥉 3착"]].map(([key, label]) => (
+            <div key={key} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+              <span style={{ fontSize: 12, color: C.dim, width: 50 }}>{label}</span>
+              <input
+                style={{ ...S.input, flex: 1 }}
+                placeholder="말 이름 또는 번호"
+                value={actualResult[key]}
+                onChange={(e) => setActualResult((prev) => ({ ...prev, [key]: e.target.value }))}
+              />
+            </div>
+          ))}
+        </div>
+
+        {/* Hit Analysis */}
+        {hitResult && (
+          <div style={{ ...S.card, borderLeft: `3px solid ${hitResult.firstHit ? C.accent : hitResult.hitCount > 0 ? C.green : C.red}` }}>
+            <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 6, color: hitResult.firstHit ? C.accent : hitResult.hitCount > 0 ? C.green : C.red }}>
+              {hitResult.firstHit ? "🎯 1착 적중!" : hitResult.hitCount >= 2 ? "✅ 복수 적중" : hitResult.hitCount === 1 ? "△ 1두 적중" : "❌ 미적중"}
+            </div>
+            <div style={{ fontSize: 12, color: C.dim }}>
+              예상 상위 5두 중 {hitResult.hitCount}두가 3착 이내
+              {hitResult.hitNames.length > 0 && ` (${hitResult.hitNames.join(", ")})`}
+            </div>
+          </div>
+        )}
+
+        {/* Comment */}
+        <div style={S.card}>
+          <div style={{ fontSize: 13, fontWeight: 600, color: C.blue, marginBottom: 8 }}>💬 코멘트</div>
+          <textarea
+            style={{ ...S.input, minHeight: 80, resize: "vertical", fontSize: 13, lineHeight: 1.5 }}
+            placeholder="이 레이스에 대한 메모, 반성점, 다음에 참고할 점..."
+            value={comment}
+            onChange={(e) => setComment(e.target.value)}
+          />
+        </div>
+
+        {/* Save Button */}
+        <button style={S.btn(true)} onClick={() => saveFeedback(selectedId)}>
+          💾 피드백 저장
+        </button>
+      </div>
+    );
+  }
+
+  // List view
+  const itemsWithPredictions = history.filter((h) => h.prediction && (h.prediction.consensus_analysis || h.prediction.predictions));
+
+  return (
+    <div style={S.content}>
+      {itemsWithPredictions.length === 0 ? (
+        <div style={S.empty}>
+          <div style={{ fontSize: 40, marginBottom: 10 }}>📝</div>
+          <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 4 }}>피드백 기록 없음</div>
+          <div style={{ fontSize: 12 }}>예상 탭에서 AI 예측을 먼저 생성하세요</div>
+        </div>
+      ) : (
+        itemsWithPredictions.map((item) => {
+          const fb = getFeedback(item.id);
+          const predicted = getPredictedHorses(item.prediction);
+          const hitResult = fb ? checkHit(predicted, fb.actual) : null;
+
+          return (
+            <div key={item.id} style={{ ...S.card, cursor: "pointer" }}
+              onClick={() => { setSelectedId(item.id); setActualResult(fb?.actual || { first: "", second: "", third: "" }); setComment(fb?.comment || ""); }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+                <div style={{ flex: 1 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 3 }}>
+                    <span style={{ fontSize: 14, fontWeight: 600 }}>
+                      {item.org?.toUpperCase()} {item.course} {item.raceNum}R
+                    </span>
+                    {fb ? (
+                      <span style={S.badge(hitResult?.firstHit ? C.accent : hitResult?.hitCount > 0 ? C.green : C.red)}>
+                        {hitResult?.firstHit ? "🎯적중" : hitResult?.hitCount > 0 ? `${hitResult.hitCount}두` : "미적중"}
+                      </span>
+                    ) : (
+                      <span style={S.badge(C.dim)}>미입력</span>
+                    )}
+                  </div>
+                  <div style={{ fontSize: 11, color: C.dim }}>{item.raceDate}</div>
+                  <div style={{ fontSize: 11, color: C.accent, marginTop: 2 }}>
+                    예상: {predicted.slice(0, 3).map((p) => p.name).join(" → ")}
+                  </div>
+                  {fb?.actual?.first && (
+                    <div style={{ fontSize: 11, color: C.green, marginTop: 2 }}>
+                      결과: {fb.actual.first} → {fb.actual.second} → {fb.actual.third}
+                    </div>
+                  )}
+                  {fb?.comment && (
+                    <div style={{ fontSize: 11, color: C.dim, marginTop: 2, fontStyle: "italic" }}>
+                      💬 {fb.comment.slice(0, 40)}{fb.comment.length > 40 ? "..." : ""}
+                    </div>
+                  )}
+                </div>
+                {fb && (
+                  <button style={{ ...S.copyBtn, color: C.red, fontSize: 10 }}
+                    onClick={(e) => { e.stopPropagation(); deleteFeedback(item.id); }}>
+                    삭제
+                  </button>
+                )}
+              </div>
+            </div>
+          );
+        })
+      )}
+    </div>
+  );
+}
+
 // ── Tab: Settings ────────────────────────────────────────────────────
 function SettingsTab() {
   const [key, setKey] = useState(localStorage.getItem("keiba_api_key") || "");
@@ -997,11 +1220,11 @@ function SettingsTab() {
       <div style={S.card}>
         <div style={S.label}>アプリ情報</div>
         <div style={{ fontSize: 13, lineHeight: 1.8 }}>
-          <div><span style={{ color: C.dim }}>アプリ:</span> 競馬AI予想エージェント v1.0</div>
+          <div><span style={{ color: C.dim }}>アプリ:</span> 競馬AI予想エージェント v1.5</div>
           <div><span style={{ color: C.dim }}>ブランド:</span> DoubleY Space</div>
           <div><span style={{ color: C.dim }}>モデル:</span> Claude Sonnet 4.5</div>
           <div><span style={{ color: C.dim }}>対応:</span> JRA（中央）・NAR（地方）</div>
-          <div><span style={{ color: C.dim }}>データ:</span> Web検索による最新出馬表</div>
+          <div><span style={{ color: C.dim }}>データ:</span> 출마표 붙여넣기 + Web検索</div>
         </div>
       </div>
 
@@ -1070,15 +1293,16 @@ export default function App() {
   const tabs = [
     { id: "predict", label: "🏇 予想" },
     { id: "tickets", label: "🎰 馬券" },
+    { id: "feedback", label: "📝 피드백" },
     { id: "history", label: "📋 履歴" },
-    { id: "settings", label: "⚙️ 設定" },
+    { id: "settings", label: "⚙️" },
   ];
 
   return (
     <div style={S.app}>
       <div style={S.header}>
         <div style={S.logo}>🏇 競馬AI予想</div>
-        <div style={{ fontSize: 10, color: C.dim }}>DoubleY Space</div>
+        <div style={{ fontSize: 10, color: C.dim }}>v1.5 | DoubleY Space</div>
       </div>
       <div style={S.tabBar}>
         {tabs.map((t) => (
@@ -1089,6 +1313,7 @@ export default function App() {
       </div>
       {tab === "predict" && <PredictTab onPredicted={onPredicted} predictState={predictState} setPredictState={setPredictState} />}
       {tab === "tickets" && <TicketsTab latestPrediction={latestPrediction} />}
+      {tab === "feedback" && <FeedbackTab history={history} />}
       {tab === "history" && <HistoryTab history={history} onDelete={onDelete} />}
       {tab === "settings" && <SettingsTab />}
     </div>
