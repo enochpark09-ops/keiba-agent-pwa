@@ -144,8 +144,96 @@ async function callKeibaAI(prompt, systemPrompt, retryCount = 0) {
   return textBlocks.join("\n").trim();
 }
 
-async function fetchRacePrediction(org, course, raceDate, raceNum) {
+async function fetchRacePrediction(org, course, raceDate, raceNum, pastedData = "") {
   const orgLabel = org === "jra" ? "JRA（中央競馬）" : "NAR（地方競馬）";
+
+  // 붙여넣은 출마표가 있는 경우: 웹 검색 없이 직접 분석
+  if (pastedData && pastedData.trim().length > 10) {
+    const systemPrompt = `あなたは日本競馬の予想分析の専門家です。
+ユーザーが提供した出馬表データを分析して、予想を作成します。
+
+【分析観点】
+- 人気順位・オッズからの期待値分析
+- 馬名から推測できる血統・実績（知っている馬の場合）
+- 騎手の実力・コース適性
+- 枠順の有利不利（内枠・外枠）
+- 距離適性
+
+出力形式（必ずJSON）：
+{
+  "race_info": {
+    "date": "${raceDate}",
+    "course": "${course}",
+    "race_number": ${raceNum},
+    "race_name": "レース名（わかる場合）",
+    "distance": "距離（わかる場合）",
+    "surface": "芝/ダート（わかる場合）",
+    "horse_count": 出走頭数
+  },
+  "entries": [
+    {"number": 馬番, "name": "馬名", "jockey": "騎手", "popularity": 人気順位}
+  ],
+  "sources": [
+    {
+      "site_name": "ユーザー提供出馬表",
+      "url": "",
+      "prediction_summary": "提供された出馬表データに基づくAI分析",
+      "recommended_horses": ["上位推奨馬名"]
+    }
+  ],
+  "consensus_analysis": {
+    "most_supported": [
+      {
+        "horse_number": 馬番,
+        "horse_name": "馬名",
+        "jockey": "騎手",
+        "support_count": "分析根拠",
+        "sites": ["AI分析"],
+        "consensus_role": "◎本命/○対抗/▲単穴/△連下/×注意"
+      }
+    ],
+    "summary": "総合分析（なぜこの馬を推奨するか）"
+  },
+  "dark_horse": {
+    "horse_name": "穴馬候補",
+    "source": "AI分析",
+    "reason": "理由"
+  },
+  "caution": "注意点"
+}
+
+必ず上位5頭をmost_supportedに含めてください。
+必ず有効なJSONのみ出力。他のテキストは不要です。`;
+
+    const prompt = `以下は${orgLabel}の${course}競馬場、${raceDate}の第${raceNum}レースの出馬表です。
+この出馬表を分析して、予想を作成してください。
+
+【出馬表データ】
+${pastedData}
+
+上記の出馬表から全出走馬をentriesに記入し、◎○▲△×の印を付けてconsensus_analysisを作成してください。`;
+
+    const raw = await callKeibaAI(prompt, systemPrompt);
+    let parsed = null;
+    const cleaned = raw.replace(/```[a-z]*\n?/g, "").replace(/```/g, "").trim();
+    try { parsed = JSON.parse(cleaned); } catch {}
+    if (!parsed) {
+      let depth = 0, start = -1;
+      for (let i = 0; i < cleaned.length; i++) {
+        if (cleaned[i] === '{') { if (depth === 0) start = i; depth++; }
+        else if (cleaned[i] === '}') {
+          depth--;
+          if (depth === 0 && start >= 0) {
+            try { parsed = JSON.parse(cleaned.substring(start, i + 1)); break; } catch { start = -1; }
+          }
+        }
+      }
+    }
+    if (parsed) return parsed;
+    return { raw_response: raw, error: "JSON解析失敗" };
+  }
+
+  // 붙여넣은 데이터가 없는 경우: 기존 웹 검색 방식
   const dateFormatted = raceDate.replace(/-/g, "");
 
   const systemPrompt = `あなたは日本競馬の予想情報を収集・分析するアシスタントです。
@@ -562,7 +650,7 @@ function TicketResult({ combo }) {
 
 // ── Tab: Predict ─────────────────────────────────────────────────────
 function PredictTab({ onPredicted, predictState, setPredictState }) {
-  const { org, course, raceDate, raceNum, loading, prediction, error, todayInfo, todayLoading } = predictState;
+  const { org, course, raceDate, raceNum, loading, prediction, error, todayInfo, todayLoading, pastedData } = predictState;
   const set = (updates) => setPredictState((prev) => ({ ...prev, ...updates }));
   const resultRef = useRef(null);
 
@@ -583,7 +671,7 @@ function PredictTab({ onPredicted, predictState, setPredictState }) {
     set({ loading: true, error: "", prediction: null });
 
     try {
-      const pred = await fetchRacePrediction(org, course, raceDate, raceNum);
+      const pred = await fetchRacePrediction(org, course, raceDate, raceNum, pastedData);
       set({ prediction: pred, loading: false });
 
       const historyItem = {
@@ -669,6 +757,31 @@ function PredictTab({ onPredicted, predictState, setPredictState }) {
           onChange={(e) => set({ raceDate: e.target.value })} />
       </div>
 
+      {/* netkeiba link + paste area */}
+      <div style={S.card}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+          <div style={S.label}>📋 출마표 붙여넣기</div>
+          <a
+            href={`https://race.netkeiba.com/top/race_list.html?kaisai_date=${raceDate.replace(/-/g, "")}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            style={{ fontSize: 12, color: C.accent, textDecoration: "none", padding: "4px 10px", border: `1px solid ${C.accent}`, borderRadius: "6px" }}
+          >
+            🔗 netkeiba 출마표 열기
+          </a>
+        </div>
+        <div style={{ fontSize: 11, color: C.dim, marginBottom: 8, lineHeight: 1.6 }}>
+          위 링크에서 레이스 선택 → 출마표의 말 이름·기수·인기 부분을 복사해서 아래에 붙여넣으세요.
+          붙여넣으면 AI가 정확하게 분석합니다.
+        </div>
+        <textarea
+          style={{ ...S.input, minHeight: 120, resize: "vertical", fontSize: 13, lineHeight: 1.5 }}
+          placeholder={"예시:\n1 ○○ブルーム 横山武史 1人気\n2 △△キング 戸崎圭太 3人気\n...\n\n또는 출마표 전체를 그대로 붙여넣어도 됩니다"}
+          value={pastedData || ""}
+          onChange={(e) => set({ pastedData: e.target.value })}
+        />
+      </div>
+
       {error && (
         <div style={{ ...S.card, borderColor: C.red, color: C.red, fontSize: 13 }}>
           ⚠️ {error}
@@ -677,7 +790,7 @@ function PredictTab({ onPredicted, predictState, setPredictState }) {
 
       <button style={{ ...S.btn(true), opacity: loading ? 0.7 : 1, marginBottom: 14 }}
         onClick={predict} disabled={loading}>
-        {loading ? "🔍 AI分析中... (出馬表検索→予想生成、最大1分かかります)" : "🏇 AI予想を生成"}
+        {loading ? "🔍 AI分析中..." : pastedData?.trim() ? "🏇 출마표 기반 AI 분석" : "🏇 웹 검색 기반 AI 예측"}
       </button>
 
       {prediction && (
@@ -930,7 +1043,7 @@ export default function App() {
     return {
       org: "jra", course: "", raceDate: kst.toISOString().slice(0, 10),
       raceNum: "11", loading: false, prediction: null, error: "",
-      todayInfo: null, todayLoading: false,
+      todayInfo: null, todayLoading: false, pastedData: "",
     };
   });
 
